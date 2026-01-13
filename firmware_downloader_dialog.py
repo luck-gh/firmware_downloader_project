@@ -11,24 +11,27 @@ import serial.tools.list_ports
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGroupBox,
                              QLabel, QLineEdit, QPushButton, QComboBox,
                              QSpinBox, QCheckBox, QFileDialog, QMessageBox,
-                             QApplication, QWidget, QSizePolicy, QScrollArea)
+                             QApplication, QWidget, QSizePolicy, QScrollArea, QSplitter)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtGui import QIcon
 
 # 多级导入支持
 try:
     from .widgets.widgets import FileDropLabel, LogWidget, ProgressWidget, ValidatedLineEdit
     from .core.downloader import FirmwareDownloader
     from .core.protocol import ProtocolHandler
+    from .widgets.utils import resource_path
 except ImportError:
     try:
         from widgets.widgets import FileDropLabel, LogWidget, ProgressWidget, ValidatedLineEdit
         from core.downloader import FirmwareDownloader
         from core.protocol import ProtocolHandler
+        from widgets.utils import resource_path
     except ImportError:
         from firmware_downloader_project.widgets.widgets import FileDropLabel, LogWidget, ProgressWidget, ValidatedLineEdit
         from firmware_downloader_project.core.downloader import FirmwareDownloader
         from firmware_downloader_project.core.protocol import ProtocolHandler
-
+        from firmware_downloader_project.widgets.utils import resource_path
 
 class DownloadThread(QThread):
     """下载线程"""
@@ -195,8 +198,15 @@ class FirmwareDownloaderDialog(QDialog):
         """初始化界面"""
         self.setWindowTitle("固件下载工具 - GHowe")
         self.setMinimumWidth(700)
-        # 移除固定高度，让窗口根据内容自适应
-        # self.setMinimumHeight(750)
+        self.setMinimumHeight(750)
+
+        # 设置图标（如果存在）
+        try:
+            icon_path = resource_path("resources/HOWE_LOGO.ico")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except:
+            pass
 
         layout = QVBoxLayout(self)
 
@@ -204,9 +214,21 @@ class FirmwareDownloaderDialog(QDialog):
         port_group = self._create_port_group()
         layout.addWidget(port_group)
 
+        # === 创建分割器：上部(文件选择+下载配置) 和 下部(进度+日志) ===
+        main_splitter = QSplitter(Qt.Vertical)
+
+        # 上部容器
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+
         # === 文件选择 ===
         file_group = self._create_file_group()
-        layout.addWidget(file_group)
+        top_layout.addWidget(file_group)
+
+        # === 进度显示 ===
+        progress_group = self._create_progress_group()
+        top_layout.addWidget(progress_group)
 
         # === 下载配置（使用滚动区域）===
         config_scroll = QScrollArea()
@@ -222,15 +244,28 @@ class FirmwareDownloaderDialog(QDialog):
         config_container_layout.addWidget(config_group)
 
         config_scroll.setWidget(config_container)
-        layout.addWidget(config_scroll, 1)  # 添加拉伸因子，使其可以扩展
+        top_layout.addWidget(config_scroll, 1)  # 添加拉伸因子，使其可以扩展
 
-        # === 进度显示 ===
-        progress_group = self._create_progress_group()
-        layout.addWidget(progress_group)
+        # 下部容器
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+
 
         # === 日志输出 ===
         log_group = self._create_log_group()
-        layout.addWidget(log_group)
+        bottom_layout.addWidget(log_group)
+
+        # 将上下部添加到分割器
+        main_splitter.addWidget(top_widget)
+        main_splitter.addWidget(bottom_widget)
+
+        # 设置初始大小比例 (上:下 = 2:1)
+        main_splitter.setSizes([400, 200])
+        main_splitter.setStretchFactor(0, 2)
+        main_splitter.setStretchFactor(1, 1)
+
+        layout.addWidget(main_splitter, 1)
 
         # === 按钮 ===
         button_layout = self._create_button_layout()
@@ -259,6 +294,7 @@ class FirmwareDownloaderDialog(QDialog):
         self.baudrate_combo = QComboBox()
         self.baudrate_combo.addItems(["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"])
         self.baudrate_combo.setCurrentText("115200")
+        self.baudrate_combo.installEventFilter(self)    # 禁用滚轮
         row1.addWidget(self.baudrate_combo)
 
         row1.addStretch()
@@ -270,18 +306,21 @@ class FirmwareDownloaderDialog(QDialog):
         self.bytesize_combo = QComboBox()
         self.bytesize_combo.addItems(["5", "6", "7", "8"])
         self.bytesize_combo.setCurrentText("8")
+        self.bytesize_combo.installEventFilter(self)    # 禁用滚轮
         row2.addWidget(self.bytesize_combo)
 
         row2.addWidget(QLabel("停止位:"))
         self.stopbits_combo = QComboBox()
         self.stopbits_combo.addItems(["1", "1.5", "2"])
         self.stopbits_combo.setCurrentText("1")
+        self.stopbits_combo.installEventFilter(self)    # 禁用滚轮
         row2.addWidget(self.stopbits_combo)
 
         row2.addWidget(QLabel("校验位:"))
         self.parity_combo = QComboBox()
         self.parity_combo.addItems(["None", "Odd", "Even", "Mark", "Space"])
         self.parity_combo.setCurrentText("None")
+        self.parity_combo.installEventFilter(self)    # 禁用滚轮
         row2.addWidget(self.parity_combo)
 
         row2.addStretch()
@@ -294,8 +333,10 @@ class FirmwareDownloaderDialog(QDialog):
         group = QGroupBox("文件选择")
         layout = QVBoxLayout(group)
 
-        # 拖放区域
+        # 拖放区域 - 设置固定高度
         self.file_drop_label = FileDropLabel("📁 拖放 .bin 文件到此处或点击浏览按钮")
+        # self.file_drop_label.setMinimumHeight(50)
+        # self.file_drop_label.setMaximumHeight(30)
         self.file_drop_label.file_dropped.connect(self._on_file_dropped)
         layout.addWidget(self.file_drop_label)
 
@@ -307,7 +348,7 @@ class FirmwareDownloaderDialog(QDialog):
         path_layout.addWidget(self.file_path_edit)
 
         browse_btn = QPushButton("浏览...")
-        browse_btn.setMaximumWidth(70)
+        browse_btn.setMinimumWidth(80)  # 设置最小宽度确保文字完整显示
         browse_btn.clicked.connect(self._browse_file)
         path_layout.addWidget(browse_btn)
 
@@ -332,6 +373,7 @@ class FirmwareDownloaderDialog(QDialog):
         self.packet_size_spin.setRange(1, 4096)
         self.packet_size_spin.setValue(256)
         self.packet_size_spin.setSuffix(" Bytes")
+        self.packet_size_spin.installEventFilter(self)  # 禁用滚轮
         basic_layout.addWidget(self.packet_size_spin)
 
         layout.addLayout(basic_layout)
@@ -344,6 +386,7 @@ class FirmwareDownloaderDialog(QDialog):
         packet_crc_layout.addWidget(QLabel("类型:"))
         self.packet_crc_type_combo = QComboBox()
         self.packet_crc_type_combo.addItems(["CRC16-MODBUS", "CRC16-CCITT", "CRC16-XMODEM", "CRC32"])
+        self.packet_crc_type_combo.installEventFilter(self)  # 禁用滚轮
         packet_crc_layout.addWidget(self.packet_crc_type_combo)
         packet_crc_layout.addStretch()
 
@@ -737,6 +780,25 @@ class FirmwareDownloaderDialog(QDialog):
         if self.initial_port_config.get('baudrate'):
             self.baudrate_combo.setCurrentText(str(self.initial_port_config['baudrate']))
 
+        # 数据位、校验位、停止位
+        if self.initial_port_config.get('bytesize'):
+            self.bytesize_combo.setCurrentText(str(self.initial_port_config['bytesize']))
+
+        if self.initial_port_config.get('parity'):
+            # 将单字符校验位转换为UI显示文本
+            parity_map = {
+                'N': 'None',
+                'O': 'Odd',
+                'E': 'Even',
+                'M': 'Mark',
+                'S': 'Space'
+            }
+            parity_text = parity_map.get(self.initial_port_config['parity'], 'None')
+            self.parity_combo.setCurrentText(parity_text)
+
+        if self.initial_port_config.get('stopbits'):
+            self.stopbits_combo.setCurrentText(str(self.initial_port_config['stopbits']))
+
         # 下载基本配置
         self.start_cmd_edit.setText(self.initial_download_config.get('start_command', 'START_DOWNLOAD'))
         self.packet_size_spin.setValue(self.initial_download_config.get('packet_size', 256))
@@ -968,9 +1030,9 @@ class FirmwareDownloaderDialog(QDialog):
         return mapping.get(parity_text, 'N')
 
     def eventFilter(self, obj, event):
-        """事件过滤器 - 禁用组合框滚轮"""
+        """事件过滤器 - 禁用组合框和数字框滚轮"""
         from PyQt5.QtCore import QEvent
-        if isinstance(obj, QComboBox) and event.type() == QEvent.Wheel:
+        if (isinstance(obj, (QComboBox, QSpinBox)) and event.type() == QEvent.Wheel):
             return True  # 忽略滚轮事件
         return super().eventFilter(obj, event)
 
@@ -996,19 +1058,211 @@ class FirmwareDownloaderDialog(QDialog):
 
 def main():
     """主函数 - 支持命令行参数"""
+    import argparse
+
+    # 创建参数解析器
+    parser = argparse.ArgumentParser(
+        description='固件下载工具 - 通过串口下载二进制固件文件',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+示例:
+  # 基本使用
+  python firmware_downloader_dialog.py --file firmware.bin --port COM3
+
+  # 完整配置
+  python firmware_downloader_dialog.py \\
+    --file firmware.bin \\
+    --port COM3 \\
+    --baudrate 115200 \\
+    --packet-size 512 \\
+    --start-command "START_DOWNLOAD" \\
+    --wait-packet-ack \\
+    --packet-ack-data "0x06"
+        '''
+    )
+
+    # === 文件和串口配置 ===
+    parser.add_argument('--file', '-f', dest='initial_file',
+                        default="",
+                        help='初始固件文件路径 (.bin)')
+    parser.add_argument('--port', '-p',
+                        default="",
+                        help='串口号 (如 COM3, /dev/ttyUSB0)')
+    parser.add_argument('--baudrate', '-b', type=int,
+                        default=115200,
+                        help='波特率 (默认: 115200)')
+    parser.add_argument('--bytesize', type=int, choices=[5, 6, 7, 8],
+                        default=8,
+                        help='数据位 (默认: 8)')
+    parser.add_argument('--parity', choices=['N', 'O', 'E', 'M', 'S'],
+                        default='N',
+                        help='校验位 N=None, O=Odd, E=Even, M=Mark, S=Space (默认: N)')
+    parser.add_argument('--stopbits', type=float, choices=[1, 1.5, 2],
+                        default=1.0,
+                        help='停止位 (默认: 1)')
+
+    # === 下载基本配置 ===
+    parser.add_argument('--packet-size', type=int,
+                        default=256,
+                        help='数据包大小 (字节, 默认: 256)')
+    parser.add_argument('--start-command',
+                        default="download 0\\r\\n",
+                        help='开始下载命令 (支持转义字符, 默认: "download 0\\r\\n")')
+    parser.add_argument('--add-packet-crc', action='store_true',
+                        help='在数据包后追加 CRC')
+    parser.add_argument('--packet-crc-type',
+                        choices=['CRC16-MODBUS', 'CRC16-CCITT', 'CRC16-XMODEM', 'CRC32'],
+                        default='CRC16-MODBUS',
+                        help='数据包 CRC 类型 (默认: CRC16-MODBUS)')
+
+    # === 开始命令 ACK 配置 ===
+    parser.add_argument('--wait-start-ack', action='store_true',
+                        help='等待开始命令 ACK')
+    parser.add_argument('--start-ack-timeout', type=int,
+                        default=1000,
+                        help='开始命令 ACK 超时时间 (毫秒, 默认: 1000)')
+    parser.add_argument('--start-ack-check-length', action='store_true',
+                        help='检查开始命令 ACK 长度')
+    parser.add_argument('--start-ack-expected-length', type=int,
+                        default=1,
+                        help='开始命令 ACK 预期长度 (默认: 1)')
+    parser.add_argument('--start-ack-check-data', action='store_true',
+                        help='检查开始命令 ACK 数据')
+    parser.add_argument('--start-ack-expected-data',
+                        default="download 0\\r\\nOK\\r\\n",
+                        help='开始命令 ACK 预期数据 (默认: "download 0\\r\\nOK\\r\\n")')
+    parser.add_argument('--start-ack-data-format',
+                        choices=['HEX', 'ASCII', 'DEC'],
+                        default='ASCII',
+                        help='开始命令 ACK 数据格式 (默认: ASCII)')
+    parser.add_argument('--start-ack-check-mode',
+                        choices=['AND', 'OR'],
+                        default='AND',
+                        help='开始命令 ACK 检查模式 (默认: AND)')
+
+    # === 数据包 ACK 配置 ===
+    parser.add_argument('--wait-packet-ack', action='store_true',
+                        help='等待数据包 ACK')
+    parser.add_argument('--packet-ack-timeout', type=int,
+                        default=1000,
+                        help='数据包 ACK 超时时间 (毫秒, 默认: 1000)')
+    parser.add_argument('--packet-ack-check-length', action='store_true',
+                        help='检查数据包 ACK 长度')
+    parser.add_argument('--packet-ack-expected-length', type=int,
+                        default=1,
+                        help='数据包 ACK 预期长度 (默认: 1)')
+    parser.add_argument('--packet-ack-check-data', action='store_true',
+                        help='检查数据包 ACK 数据')
+    parser.add_argument('--packet-ack-expected-data',
+                        default="OK\\r\\n",
+                        help='数据包 ACK 预期数据 (默认: "OK\\r\\n")')
+    parser.add_argument('--packet-ack-data-format',
+                        choices=['HEX', 'ASCII', 'DEC'],
+                        default='ASCII',
+                        help='数据包 ACK 数据格式 (默认: ASCII)')
+    parser.add_argument('--packet-ack-check-crc', action='store_true',
+                        help='检查数据包 ACK 的 CRC')
+    parser.add_argument('--packet-ack-crc-type',
+                        choices=['CRC16-MODBUS', 'CRC16-CCITT', 'CRC16-XMODEM', 'CRC32'],
+                        default='CRC16-MODBUS',
+                        help='数据包 ACK CRC 类型 (默认: CRC16-MODBUS)')
+    parser.add_argument('--packet-ack-check-mode',
+                        choices=['AND', 'OR'],
+                        default='AND',
+                        help='数据包 ACK 检查模式 (默认: AND)')
+
+    # === 末尾数据包 ACK 配置 ===
+    parser.add_argument('--wait-last-packet-ack', action='store_true',
+                        help='等待末尾数据包 ACK')
+    parser.add_argument('--last-packet-ack-timeout', type=int,
+                        default=5000,
+                        help='末尾数据包 ACK 超时时间 (毫秒, 默认: 5000)')
+    parser.add_argument('--last-packet-ack-check-length', action='store_true',
+                        help='检查末尾数据包 ACK 长度')
+    parser.add_argument('--last-packet-ack-expected-length', type=int,
+                        default=1,
+                        help='末尾数据包 ACK 预期长度 (默认: 1)')
+    parser.add_argument('--last-packet-ack-check-data', action='store_true',
+                        help='检查末尾数据包 ACK 数据')
+    parser.add_argument('--last-packet-ack-expected-data',
+                        default="END\\r\\n",
+                        help='末尾数据包 ACK 预期数据 (默认: "END\\r\\n")')
+    parser.add_argument('--last-packet-ack-data-format',
+                        choices=['HEX', 'ASCII', 'DEC'],
+                        default='ASCII',
+                        help='末尾数据包 ACK 数据格式 (默认: ASCII)')
+    parser.add_argument('--last-packet-ack-check-crc', action='store_true',
+                        help='检查末尾数据包 ACK 的 CRC')
+    parser.add_argument('--last-packet-ack-crc-type',
+                        choices=['CRC16-MODBUS', 'CRC16-CCITT', 'CRC16-XMODEM', 'CRC32'],
+                        default='CRC16-MODBUS',
+                        help='末尾数据包 ACK CRC 类型 (默认: CRC16-MODBUS)')
+    parser.add_argument('--last-packet-ack-check-mode',
+                        choices=['AND', 'OR'],
+                        default='AND',
+                        help='末尾数据包 ACK 检查模式 (默认: AND)')
+
+    # === 结尾字符串配置 ===
+    parser.add_argument('--send-end-string', action='store_true',
+                        help='发送结尾字符串')
+    parser.add_argument('--end-string',
+                        default="?\\r\\n",
+                        help='结尾字符串 (默认: "?\\r\\n")')
+
+    # 解析参数
+    args = parser.parse_args()
+
+    # 创建应用
     app = QApplication(sys.argv)
 
-    # 解析命令行参数
-    args = sys.argv[1:]
-    
-    initial_file    = args[0]       if len(args) > 0 else "D:/BaiduSyncdisk/01_Code/Python/Bin2Hex/ZPX002_Test.bin"
-    port            = args[1]       if len(args) > 1 else "COM15"
-    baudrate        = int(args[2])  if len(args) > 2 else 115200
-
+    # 创建对话框，传递所有参数
     dialog = FirmwareDownloaderDialog(
-        initial_file=initial_file,
-        port=port,
-        baudrate=baudrate
+        # 文件和串口配置
+        initial_file=args.initial_file,
+        port=args.port,
+        baudrate=args.baudrate,
+        bytesize=args.bytesize,
+        parity=args.parity,
+        stopbits=args.stopbits,
+        # 下载基本配置
+        packet_size=args.packet_size,
+        start_command=args.start_command,
+        add_packet_crc=args.add_packet_crc,
+        packet_crc_type=args.packet_crc_type,
+        # 开始命令 ACK 配置
+        wait_start_ack=args.wait_start_ack,
+        start_ack_timeout=args.start_ack_timeout,
+        start_ack_check_length=args.start_ack_check_length,
+        start_ack_expected_length=args.start_ack_expected_length,
+        start_ack_check_data=args.start_ack_check_data,
+        start_ack_expected_data=args.start_ack_expected_data,
+        start_ack_data_format=args.start_ack_data_format,
+        start_ack_check_mode=args.start_ack_check_mode,
+        # 数据包 ACK 配置
+        wait_packet_ack=args.wait_packet_ack,
+        packet_ack_timeout=args.packet_ack_timeout,
+        packet_ack_check_length=args.packet_ack_check_length,
+        packet_ack_expected_length=args.packet_ack_expected_length,
+        packet_ack_check_data=args.packet_ack_check_data,
+        packet_ack_expected_data=args.packet_ack_expected_data,
+        packet_ack_data_format=args.packet_ack_data_format,
+        packet_ack_check_crc=args.packet_ack_check_crc,
+        packet_ack_crc_type=args.packet_ack_crc_type,
+        packet_ack_check_mode=args.packet_ack_check_mode,
+        # 末尾数据包 ACK 配置
+        wait_last_packet_ack=args.wait_last_packet_ack,
+        last_packet_ack_timeout=args.last_packet_ack_timeout,
+        last_packet_ack_check_length=args.last_packet_ack_check_length,
+        last_packet_ack_expected_length=args.last_packet_ack_expected_length,
+        last_packet_ack_check_data=args.last_packet_ack_check_data,
+        last_packet_ack_expected_data=args.last_packet_ack_expected_data,
+        last_packet_ack_data_format=args.last_packet_ack_data_format,
+        last_packet_ack_check_crc=args.last_packet_ack_check_crc,
+        last_packet_ack_crc_type=args.last_packet_ack_crc_type,
+        last_packet_ack_check_mode=args.last_packet_ack_check_mode,
+        # 结尾字符串配置
+        send_end_string=args.send_end_string,
+        end_string=args.end_string
     )
     dialog.show()
 
