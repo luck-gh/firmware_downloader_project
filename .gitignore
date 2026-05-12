@@ -28,7 +28,7 @@ Thumbs.db
 *.log
 
 # 打包
-
+Debug/
 *.pyc
 *.exe
 build/*
@@ -37,3 +37,11 @@ dist/*
 # claude
 .settings/*
 .claude
+
+# 测试
+test/
+test*
+
+# 数据与配置
+*.json
+*.csv
